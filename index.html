@@ -16,16 +16,25 @@
      q1.jpg ... q10.jpg                        question screens
      button1.png ... button6.png               answer buttons (choice #)
      ringtojoin.png                            button on start2.jpg
-     <category-key>.pdf                        one PDF per result, e.g.
-       brand-strategy.pdf, advertising-creative.pdf,
-       entertainment-marketing.pdf, marketing-ops.pdf,
-       ux-ui-digital-experience.pdf, marketing-project-management.pdf,
-       pr-comms.pdf, partnerships-influencer.pdf,
-       experiential-field.pdf, social-media.pdf,
-       consumer-insights.pdf, product-marketing.pdf
+     <category-key>-1.pdf ... <category-key>-8.pdf
+       8 PDFs per result, e.g.:
+         brand-strategy-1.pdf ... brand-strategy-8.pdf
+         advertising-creative-1.pdf ... advertising-creative-8.pdf
+         entertainment-marketing-1.pdf ... entertainment-marketing-8.pdf
+         marketing-ops-1.pdf ... marketing-ops-8.pdf
+         ux-ui-digital-experience-1.pdf ... ux-ui-digital-experience-8.pdf
+         marketing-project-management-1.pdf ... marketing-project-management-8.pdf
+         pr-comms-1.pdf ... pr-comms-8.pdf
+         partnerships-influencer-1.pdf ... partnerships-influencer-8.pdf
+         experiential-field-1.pdf ... experiential-field-8.pdf
+         social-media-1.pdf ... social-media-8.pdf
+         consumer-insights-1.pdf ... consumer-insights-8.pdf
+         product-marketing-1.pdf ... product-marketing-8.pdf
 
  HOW TO EDIT QUIZ DATA  (everything lives in the QUIZ object below)
-   - QUIZ.careers    : category keys, display labels, PDF filenames.
+   - QUIZ.careers    : category keys, display labels, and 8 PDF filenames
+                       (auto-generated as <key>-1.pdf ... <key>-8.pdf
+                       unless an explicit `pdfs` array is provided).
    - QUIZ.intro      : intro images, stacked top to bottom with no gaps
                        as one scrolling page, plus the controls placed
                        on them (ringtojoin.png link, start button).
@@ -51,11 +60,8 @@
    The winning key is saved in localStorage as "marketing_quiz_result".
 
  RUN LOCALLY
-   Double-clicking index.html works, but a local server is better
-   (PDF existence checks and inline PDF viewing are more reliable):
+   A local server is required for fetch() and PDF.js worker loading:
      python3 -m http.server 8000      then open http://localhost:8000
-   Mobile Safari may show only page 1 of a PDF inline; the result
-   screen therefore also offers an "Open PDF" button.
 =====================================================================
 -->
 <html lang="en">
@@ -106,9 +112,15 @@ html, body { margin:0; min-height:100%; background:#16101b;
 .slice { position:relative; display:block; width:100%; container-type:inline-size; line-height:0; }
 .slice > img { display:block; width:100%; height:auto; object-fit:cover; }
 
-/* ---------- Result (PDF) + notices ---------- */
-#result { position:fixed; inset:0; background:#16101b; container-type:inline-size; z-index:10; }
-#result iframe { position:absolute; inset:0; width:100%; height:100%; border:0; background:#fff; }
+/* ---------- Result (8 PDFs stacked full-width with zero gaps) + notices ---------- */
+#result { position:fixed; inset:0; overflow-y:auto; overflow-x:hidden; background:#16101b; container-type:inline-size; z-index:10; }
+#result-stack { display:flex; flex-direction:column; width:100vw; gap:0; margin:0; padding:0; line-height:0; }
+.pdf-page-canvas { display:block; width:100vw; max-width:100%; height:auto; margin:0; padding:0; border:0; }
+.pdf-fallback-frame { display:block; width:100vw; height:100vh; margin:0; padding:0; border:0; background:#fff; }
+.result-status { padding:1rem; text-align:center; color:var(--paper); font-size:clamp(13px, 3cqw, 18px); line-height:1.4; }
+.result-actions { position:fixed; left:0; right:0; bottom:18px; display:flex; justify-content:center; gap:12px; padding:0 16px; pointer-events:none; z-index:15; }
+.result-actions .action-btn { pointer-events:auto; position:static; translate:none; }
+
 #notice { position:fixed; inset:0; display:grid; place-items:center; padding:16px;
   background:rgba(22,16,27,.92); z-index:20; }
 #notice .card { max-width:34rem; max-height:90vh; overflow:auto; padding:1.5rem;
@@ -120,6 +132,7 @@ html, body { margin:0; min-height:100%; background:#16101b;
   font-size:clamp(11px,3cqw,16px); }
 @media (prefers-reduced-motion: reduce) { #stage.in { animation:none; } .btn { transition:none; } }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
 <div id="backdrop"></div>
@@ -136,25 +149,31 @@ html, body { margin:0; min-height:100%; background:#16101b;
    1. QUIZ DATA  -  the ONLY section you need to edit to change content.
    Drop assets next to index.html (see README above).
    ===================================================================== */
+const PDFS_PER_CAREER = 8;
+
+function makeCareerPdfs(key, count = PDFS_PER_CAREER) {
+  return Array.from({ length: count }, (_, idx) => `${key}-${idx + 1}.pdf`);
+}
+
 const QUIZ = {
   storageKey: 'marketing_quiz_result',
   defaultResult: 'brand-strategy',   // used if a result cannot be determined
   fallbackRatio: 9 / 16,             // stage shape when an image is missing
 
-  // Category key -> label + PDF filename. Order matters for the final tie-break.
+  // Category key -> label + 8 PDF filenames. Order matters for the final tie-break.
   careers: {
-    'brand-strategy':               { label: 'Brand Strategy',               pdf: 'brand-strategy.pdf' },
-    'advertising-creative':         { label: 'Advertising & Creative',       pdf: 'advertising-creative.pdf' },
-    'entertainment-marketing':      { label: 'Entertainment Marketing',      pdf: 'entertainment-marketing.pdf' },
-    'marketing-ops':                { label: 'Marketing Operations',         pdf: 'marketing-ops.pdf' },
-    'ux-ui-digital-experience':     { label: 'UX/UI & Digital Experience',   pdf: 'ux-ui-digital-experience.pdf' },
-    'marketing-project-management': { label: 'Marketing Project Management', pdf: 'marketing-project-management.pdf' },
-    'pr-comms':                     { label: 'PR & Communications',          pdf: 'pr-comms.pdf' },
-    'partnerships-influencer':      { label: 'Partnerships & Influencer',    pdf: 'partnerships-influencer.pdf' },
-    'experiential-field':           { label: 'Experiential & Field',         pdf: 'experiential-field.pdf' },
-    'social-media':                 { label: 'Social Media',                 pdf: 'social-media.pdf' },
-    'consumer-insights':            { label: 'Consumer Insights',            pdf: 'consumer-insights.pdf' },
-    'product-marketing':            { label: 'Product Marketing',            pdf: 'product-marketing.pdf' }
+    'brand-strategy':               { label: 'Brand Strategy',               pdfs: makeCareerPdfs('brand-strategy') },
+    'advertising-creative':         { label: 'Advertising & Creative',       pdfs: makeCareerPdfs('advertising-creative') },
+    'entertainment-marketing':      { label: 'Entertainment Marketing',      pdfs: makeCareerPdfs('entertainment-marketing') },
+    'marketing-ops':                { label: 'Marketing Operations',         pdfs: makeCareerPdfs('marketing-ops') },
+    'ux-ui-digital-experience':     { label: 'UX/UI & Digital Experience',   pdfs: makeCareerPdfs('ux-ui-digital-experience') },
+    'marketing-project-management': { label: 'Marketing Project Management', pdf: undefined, pdfs: makeCareerPdfs('marketing-project-management') },
+    'pr-comms':                     { label: 'PR & Communications',          pdfs: makeCareerPdfs('pr-comms') },
+    'partnerships-influencer':      { label: 'Partnerships & Influencer',    pdfs: makeCareerPdfs('partnerships-influencer') },
+    'experiential-field':           { label: 'Experiential & Field',         pdfs: makeCareerPdfs('experiential-field') },
+    'social-media':                 { label: 'Social Media',                 pdfs: makeCareerPdfs('social-media') },
+    'consumer-insights':            { label: 'Consumer Insights',            pdfs: makeCareerPdfs('consumer-insights') },
+    'product-marketing':            { label: 'Product Marketing',            pdfs: makeCareerPdfs('product-marketing') }
   },
 
   // Intro images, stacked top-to-bottom (in this order) as ONE scrolling page
@@ -165,8 +184,6 @@ const QUIZ = {
     { image: 'start2.jpg', controls: [
       { type: 'link', img: 'ringtojoin.png', label: 'Ring to join', alt: 'Ring to join on Instagram',
         href: 'https://instagram.com/hiredwithangelika', x: 45, y: 90, w: 28 } ] },
-    // start3.jpg is landscape; the headline ends ~72% down and the @handle sits at ~93%.
-    // `size` = button text size as % of image width (kept readable on phones).
     { image: 'start3.jpg', controls: [
       { type: 'start', img: 'startquiz.png', label: 'Start the quiz', alt: 'start the quiz',
         x: 50, y: 80, w: 28 } ] }
@@ -237,7 +254,7 @@ const QUIZ = {
       { button: 'button3.png', caption: 'Inside a product team',                weights: { 'product-marketing': 3, 'ux-ui-digital-experience': 1 } },
       { button: 'button4.png', caption: 'In a fast-moving comms room',          weights: { 'pr-comms': 2, 'social-media': 2 } },
       { button: 'button5.png', caption: 'At the ops command center',            weights: { 'marketing-ops': 2, 'marketing-project-management': 2 } } ] },
-    { id: 'q10', image: 'q10.jpg', prompt: 'Which headline would you most love to see?', options: [   // six options
+    { id: 'q10', image: 'q10.jpg', prompt: 'Which headline would you most love to see?', options: [
       { button: 'button1.png', caption: 'A brand reimagined',                   weights: { 'brand-strategy': 3, 'consumer-insights': 1 } },
       { button: 'button2.png', caption: 'The product sells out',                weights: { 'product-marketing': 3, 'partnerships-influencer': 1 } },
       { button: 'button3.png', caption: 'The post breaks the internet',         weights: { 'social-media': 3, 'entertainment-marketing': 1 } },
@@ -257,6 +274,11 @@ const QUIZ = {
   const stage = $('stage'), bg = $('bg'), layer = $('layer'), backdrop = $('backdrop');
   const resultEl = $('result'), noticeEl = $('notice'), introEl = $('intro');
 
+  if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+
   // ---- In-memory state (only the final result touches localStorage) ----
   let scores = {}, maxSingle = {}, locked = false, token = 0;
 
@@ -266,11 +288,21 @@ const QUIZ = {
     locked = false;
   }
 
+  function getCareerPdfs(key, career) {
+    if (Array.isArray(career.pdfs) && career.pdfs.length) return career.pdfs;
+    if (career.pdf) return [career.pdf];
+    return makeCareerPdfs(key);
+  }
+
   // ---- Data validation: returns a list of human-readable problems ----
   function validate(d) {
     const e = [], keys = Object.keys(d.careers || {});
     if (!keys.length) e.push('careers: at least one category is required');
-    keys.forEach((k) => { if (!d.careers[k] || !d.careers[k].pdf) e.push('careers.' + k + ': missing "pdf"'); });
+    keys.forEach((k) => {
+      const c = d.careers[k];
+      const files = c ? getCareerPdfs(k, c) : [];
+      if (!c || !files.length) e.push('careers.' + k + ': missing "pdfs"');
+    });
     if (!d.careers || !d.careers[d.defaultResult]) e.push('defaultResult must be a key of careers');
     if (!Array.isArray(d.intro) || !d.intro.length) e.push('intro: at least one screen is required');
     else d.intro.forEach((s, i) => { if (!s || !s.image) e.push('intro[' + i + ']: missing "image"'); });
@@ -310,7 +342,7 @@ const QUIZ = {
   function pickWinner() {
     const keys = Object.keys(QUIZ.careers);
     const top = Math.max(...keys.map((k) => scores[k]));
-    if (!(top > 0)) return QUIZ.defaultResult;           // nothing scored
+    if (!(top > 0)) return QUIZ.defaultResult;
     const tied = keys.filter((k) => scores[k] === top);
     if (tied.length === 1) return tied[0];
     const best = Math.max(...tied.map((k) => maxSingle[k]));
@@ -328,7 +360,7 @@ const QUIZ = {
       card.appendChild(ul);
     }
     noticeEl.appendChild(card); noticeEl.hidden = false;
-    if (action) {                                         // optional recovery button
+    if (action) {
       const b = makeControl({ label: action.label, onClick: action.onClick });
       b.style.cssText = 'position:static;translate:none;margin-top:1rem;display:inline-flex';
       card.appendChild(b);
@@ -347,7 +379,7 @@ const QUIZ = {
     el.setAttribute('aria-label', d.alt || d.label);
     if (d.img) {
       const im = new Image(); im.alt = ''; im.draggable = false;
-      im.onerror = () => {                                // missing button asset -> text button
+      im.onerror = () => {
         console.warn('Missing asset: ' + d.img);
         im.remove(); el.classList.add('pill'); el.textContent = d.label;
       };
@@ -365,7 +397,7 @@ const QUIZ = {
   async function showScreen(image, alt, controls) {
     const my = ++token;
     const img = await loadImage(image);
-    if (my !== token) return;                             // a newer screen took over
+    if (my !== token) return;
     resultEl.hidden = true; noticeEl.hidden = true; introEl.hidden = true; stage.hidden = false;
     let ratio = QUIZ.fallbackRatio;
     layer.replaceChildren();
@@ -373,7 +405,7 @@ const QUIZ = {
       ratio = img.naturalWidth / img.naturalHeight;
       bg.hidden = false; bg.src = image; bg.alt = alt || '';
       backdrop.style.backgroundImage = 'url("' + image + '")';
-    } else {                                              // missing background: keep quiz usable
+    } else {
       console.error('Missing asset: ' + image);
       bg.hidden = true; bg.removeAttribute('src'); backdrop.style.backgroundImage = 'none';
       const w = document.createElement('div'); w.className = 'warn';
@@ -387,16 +419,15 @@ const QUIZ = {
   }
 
   // ---- Flow ----
-  // Intro = one scrollable page: every intro image at full width, stacked with no gaps.
   function showIntro() {
-    token++;                                              // cancel any pending screen
+    token++;
     stage.hidden = true; resultEl.hidden = true; noticeEl.hidden = true;
     backdrop.style.backgroundImage = 'none';
     introEl.replaceChildren();
     QUIZ.intro.forEach((s, i) => {
       const slice = document.createElement('div'); slice.className = 'slice';
       const im = new Image(); im.alt = 'Introduction part ' + (i + 1); im.draggable = false;
-      im.onerror = () => {                                // missing image: show a placeholder
+      im.onerror = () => {
         console.error('Missing asset: ' + s.image);
         im.remove(); slice.style.aspectRatio = QUIZ.fallbackRatio; slice.style.background = '#241a2b';
         const w = document.createElement('div'); w.className = 'warn';
@@ -426,45 +457,107 @@ const QUIZ = {
   }
 
   function choose(i, k) {
-    if (locked) return; locked = true;                    // ignore double taps
+    if (locked) return; locked = true;
     addWeights(QUIZ.questions[i].options[k].weights);
     if (i + 1 < QUIZ.questions.length) showQuestion(i + 1); else showResult();
   }
 
-  // Confirm a PDF exists. Network errors (e.g. file://) can't be verified -> assume OK.
-  async function pdfUrl(key) {
-    const url = QUIZ.careers[key].pdf;
+  async function pdfUrl(url) {
     try { const r = await fetch(url, { method: 'HEAD' }); return (r.ok || r.status === 405) ? url : null; }
     catch (e) { return url; }
   }
 
+  async function renderPdfIntoStack(url, stackEl, label, docIndex, currentToken) {
+    if (window.pdfjsLib && typeof window.pdfjsLib.getDocument === 'function') {
+      const loadingTask = window.pdfjsLib.getDocument(url);
+      const pdfDoc = await loadingTask.promise;
+      if (currentToken !== token) return;
+
+      const containerWidth = Math.max(document.documentElement.clientWidth || window.innerWidth || 320, 320);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+        if (currentToken !== token) return;
+        const page = await pdfDoc.getPage(pageNum);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const cssScale = containerWidth / baseViewport.width;
+        const viewport = page.getViewport({ scale: cssScale * dpr });
+
+        const canvas = document.createElement('canvas');
+        canvas.className = 'pdf-page-canvas';
+        canvas.width = Math.round(viewport.width);
+        canvas.height = Math.round(viewport.height);
+        canvas.setAttribute('aria-label', `${label} — PDF ${docIndex + 1}, page ${pageNum}`);
+        stackEl.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d', { alpha: false });
+        await page.render({ canvasContext: ctx, viewport }).promise;
+      }
+      return;
+    }
+
+    // Fallback if PDF.js is unavailable: full-width iframe with zero gap
+    const frame = document.createElement('iframe');
+    frame.className = 'pdf-fallback-frame';
+    frame.src = url + '#view=FitH&zoom=page-width&toolbar=0&navpanes=0';
+    frame.title = `${label} result part ${docIndex + 1}`;
+    stackEl.appendChild(frame);
+  }
+
   async function showResult() {
-    token++;                                              // cancel pending screens
+    const my = ++token;
     let key = QUIZ.defaultResult;
     try { key = pickWinner(); } catch (e) { console.error('Scoring failed:', e); }
     if (!QUIZ.careers[key]) key = QUIZ.defaultResult;
-    let url = await pdfUrl(key);
-    if (!url && key !== QUIZ.defaultResult) {             // missing PDF -> default result
-      console.warn('Missing PDF for ' + key + '; using ' + QUIZ.defaultResult);
-      key = QUIZ.defaultResult; url = await pdfUrl(key);
+
+    let files = getCareerPdfs(key, QUIZ.careers[key]);
+    let availableUrls = (await Promise.all(files.map(pdfUrl))).filter(Boolean);
+
+    if (!availableUrls.length && key !== QUIZ.defaultResult) {
+      console.warn('Missing PDFs for ' + key + '; using ' + QUIZ.defaultResult);
+      key = QUIZ.defaultResult;
+      files = getCareerPdfs(key, QUIZ.careers[key]);
+      availableUrls = (await Promise.all(files.map(pdfUrl))).filter(Boolean);
     }
+
     try { localStorage.setItem(QUIZ.storageKey, key); } catch (e) { console.warn('localStorage unavailable:', e); }
-    if (!url) {
-      return showNotice('Your result file could not be loaded',
-        ['Add "' + QUIZ.careers[key].pdf + '" next to index.html and try again.'],
+
+    if (!availableUrls.length) {
+      return showNotice('Your result files could not be loaded',
+        ['Add "' + files.join('", "') + '" next to index.html and try again.'],
         { label: 'Retake quiz', onClick: startQuiz });
     }
-    // PDF fills the screen: the iframe is 100% x 100%, and FitH / page-width make the viewer
-    // scale each page to the full WIDTH of the screen (scroll down for further pages).
-    // FitH is read by Chrome/Edge/Safari, zoom=page-width by Firefox.
+
     resultEl.replaceChildren();
-    const f = document.createElement('iframe');
-    f.src = url + '#view=FitH&zoom=page-width&toolbar=0&navpanes=0'; f.title = QUIZ.careers[key].label + ' result';
-    resultEl.appendChild(f);
-    resultEl.appendChild(makeControl({ href: url, label: 'Open PDF', x: 88, y: 95 }));
-    resultEl.appendChild(makeControl({ label: 'Retake quiz', onClick: startQuiz, x: 12, y: 95 }));
+    const stackEl = document.createElement('div');
+    stackEl.id = 'result-stack';
+    resultEl.appendChild(stackEl);
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'result-actions';
+    const retakeBtn = makeControl({ label: 'Retake quiz', onClick: startQuiz });
+    retakeBtn.classList.add('action-btn');
+    actionsEl.appendChild(retakeBtn);
+    resultEl.appendChild(actionsEl);
+
     stage.hidden = true; noticeEl.hidden = true; introEl.hidden = true; resultEl.hidden = false;
+    resultEl.scrollTop = 0;
     backdrop.style.backgroundImage = 'none';
+
+    const label = QUIZ.careers[key].label;
+    for (let i = 0; i < availableUrls.length; i++) {
+      if (my !== token) return;
+      try {
+        await renderPdfIntoStack(availableUrls[i], stackEl, label, i, my);
+      } catch (err) {
+        console.warn('Could not render PDF:', availableUrls[i], err);
+        const fallbackFrame = document.createElement('iframe');
+        fallbackFrame.className = 'pdf-fallback-frame';
+        fallbackFrame.src = availableUrls[i] + '#view=FitH&zoom=page-width&toolbar=0&navpanes=0';
+        fallbackFrame.title = `${label} result part ${i + 1}`;
+        stackEl.appendChild(fallbackFrame);
+      }
+    }
   }
 
   // ---- Boot ----
