@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<!--
+=====================================================================
+ MARKETING CAREER QUIZ - README
+=====================================================================
+ WHAT IT IS
+   A full-screen, image-driven quiz. Every screen is a pre-made image
+   scaled to fit the device (aspect ratio preserved, letterboxed over a
+   blurred copy of the same image so nothing is cropped or distorted),
+   with buttons layered on top at fixed PERCENTAGE positions, so they
+   stay aligned on desktop, tablet and mobile.
+
+ SETUP / ASSET PLACEMENT
+   Put every asset in the SAME FOLDER as this index.html:
+     start1.jpg, start2.jpg, start3.jpg        intro pages (in order)
+     q1.jpg ... q10.jpg                        question screens
+     button1.png ... button6.png               answer buttons (choice #)
+     ringtojoin.png                            button on start2.jpg
+     <category-key>.pdf                        one PDF per result, e.g.
+       brand-strategy.pdf, advertising-creative.pdf,
+       entertainment-marketing.pdf, marketing-ops.pdf,
+       ux-ui-digital-experience.pdf, marketing-project-management.pdf,
+       pr-comms.pdf, partnerships-influencer.pdf,
+       experiential-field.pdf, social-media.pdf,
+       consumer-insights.pdf, product-marketing.pdf
+
+ HOW TO EDIT QUIZ DATA  (everything lives in the QUIZ object below)
+   - QUIZ.careers    : category keys, display labels, PDF filenames.
+   - QUIZ.intro      : intro images, stacked top to bottom with no gaps
+                       as one scrolling page, plus the controls placed
+                       on them (ringtojoin.png link, start button).
+   - QUIZ.questions  : id, image, prompt, options. Each option has a
+                       `button` (png), a `caption` (accessibility text
+                       and fallback label) and `weights` (points per
+                       category key). Option order = button order.
+   - QUIZ.answerLayout: where answer buttons sit on question screens
+                       (percent of the image), one layout per option
+                       count (5 = row of hearts, 6 = Q10 grid); override
+                       per question with a `layout` property.
+   The code validates this object on load and shows a readable error
+   if anything is wrong. No other part of the file needs editing.
+   NOTE: the prompts/captions/weights shipped here are SAMPLE content.
+   Match them to what your q1-q10 images actually say.
+
+ SCORING
+   Each pick adds its weights to the category totals. Highest total wins.
+   Tie-break 1: the tied category whose single option carried the
+   highest individual weight wins. Tie-break 2 (still tied): the one
+   listed first in QUIZ.careers. If no result can be determined, the
+   result falls back to QUIZ.defaultResult ("brand-strategy").
+   The winning key is saved in localStorage as "marketing_quiz_result".
+
+ RUN LOCALLY
+   Double-clicking index.html works, but a local server is better
+   (PDF existence checks and inline PDF viewing are more reliable):
+     python3 -m http.server 8000      then open http://localhost:8000
+   Mobile Safari may show only page 1 of a PDF inline; the result
+   screen therefore also offers an "Open PDF" button.
+=====================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Which marketing career fits you?</title>
+<style>
+/* ---------- Layout: full-bleed stage sized to the image ratio ---------- */
+:root { --ink:#2a1633; --paper:#fff7ef; }
+* { box-sizing: border-box; }
+html, body { margin:0; min-height:100%; background:#16101b;
+  font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif; overflow-x:hidden; }
+
+/* Blurred copy of the current image fills any letterbox bars. */
+#backdrop { position:fixed; inset:0; background:#16101b center/cover no-repeat;
+  filter: blur(26px) brightness(.55); transform: scale(1.12); }
+
+/* IMPORTANT: rules like `#notice { display:grid }` would otherwise override the
+   `hidden` attribute and leave an invisible-but-dark overlay on top of the page. */
+[hidden] { display:none !important; }
+
+/* The stage scales to 100% of the screen width, maintaining the image aspect ratio
+   so questions display full-width without distortion. */
+#stage { position:relative; width:100vw; margin:0 auto;
+  --ratio:.5625; aspect-ratio:var(--ratio);
+  container-type:inline-size; background:#241a2b; }
+#stage.in { animation: fade .3s ease; }
+@keyframes fade { from { opacity:0 } to { opacity:1 } }
+#bg { position:absolute; inset:0; width:100%; height:100%; display:block;
+  user-select:none; -webkit-user-drag:none; object-fit:cover; }
+#layer { position:absolute; inset:0; }
+
+/* ---------- Buttons (all scale ~1.05 on hover) ---------- */
+.btn { position:absolute; display:block; padding:0; border:0; background:none;
+  cursor:pointer; text-decoration:none; translate:-50% -50%; scale:1;
+  transition:scale .18s ease; -webkit-tap-highlight-color:transparent; }
+.btn:hover, .btn:focus-visible { scale:1.05; }
+.btn:focus-visible { outline:3px solid #fff; outline-offset:4px; border-radius:12px; }
+.btn img { display:block; width:100%; height:auto; pointer-events:none; }
+.pill { display:flex; align-items:center; justify-content:center; white-space:nowrap;
+  padding:.55em 1.2em; border-radius:999px; background:var(--paper); color:var(--ink);
+  font-family:inherit; font-weight:700; font-size:clamp(13px, 4cqw, 26px); line-height:1.1;
+  box-shadow:0 .25em 1em rgba(0,0,0,.35); }
+
+/* ---------- Intro: start1-3 stacked as one scrolling page, no gaps ---------- */
+#intro { position:absolute; inset:0; min-height:100vh; overflow-y:auto; overflow-x:hidden; background:#16101b; z-index:5; }
+.slice { position:relative; display:block; width:100%; container-type:inline-size; line-height:0; }
+.slice > img { display:block; width:100%; height:auto; object-fit:cover; }
+
+/* ---------- Result (PDF) + notices ---------- */
+#result { position:fixed; inset:0; background:#16101b; container-type:inline-size; z-index:10; }
+#result iframe { position:absolute; inset:0; width:100%; height:100%; border:0; background:#fff; }
+#notice { position:fixed; inset:0; display:grid; place-items:center; padding:16px;
+  background:rgba(22,16,27,.92); z-index:20; }
+#notice .card { max-width:34rem; max-height:90vh; overflow:auto; padding:1.5rem;
+  border-radius:16px; background:var(--paper); color:var(--ink); }
+#notice h2 { margin:0 0 .5rem; font-size:1.25rem; }
+#notice ul { margin:.5rem 0 0; padding-left:1.2rem; font-size:.95rem; }
+.warn { position:absolute; left:50%; top:3%; translate:-50% 0; max-width:90%;
+  padding:.4em .9em; border-radius:8px; background:#ffe3e3; color:#7a1020;
+  font-size:clamp(11px,3cqw,16px); }
+@media (prefers-reduced-motion: reduce) { #stage.in { animation:none; } .btn { transition:none; } }
+</style>
+</head>
+<body>
+<div id="backdrop"></div>
+<main id="stage" aria-live="polite">
+  <img id="bg" alt="">
+  <div id="layer"></div>
+</main>
+<div id="intro" hidden></div>
+<div id="result" hidden></div>
+<div id="notice" role="alert" hidden></div>
+
+<script>
+/* =====================================================================
+   1. QUIZ DATA  -  the ONLY section you need to edit to change content.
+   Drop assets next to index.html (see README above).
+   ===================================================================== */
+const QUIZ = {
+  storageKey: 'marketing_quiz_result',
+  defaultResult: 'brand-strategy',   // used if a result cannot be determined
+  fallbackRatio: 9 / 16,             // stage shape when an image is missing
+
+  // Category key -> label + PDF filename. Order matters for the final tie-break.
+  careers: {
+    'brand-strategy':               { label: 'Brand Strategy',               pdf: 'brand-strategy.pdf' },
+    'advertising-creative':         { label: 'Advertising & Creative',       pdf: 'advertising-creative.pdf' },
+    'entertainment-marketing':      { label: 'Entertainment Marketing',      pdf: 'entertainment-marketing.pdf' },
+    'marketing-ops':                { label: 'Marketing Operations',         pdf: 'marketing-ops.pdf' },
+    'ux-ui-digital-experience':     { label: 'UX/UI & Digital Experience',   pdf: 'ux-ui-digital-experience.pdf' },
+    'marketing-project-management': { label: 'Marketing Project Management', pdf: 'marketing-project-management.pdf' },
+    'pr-comms':                     { label: 'PR & Communications',          pdf: 'pr-comms.pdf' },
+    'partnerships-influencer':      { label: 'Partnerships & Influencer',    pdf: 'partnerships-influencer.pdf' },
+    'experiential-field':           { label: 'Experiential & Field',         pdf: 'experiential-field.pdf' },
+    'social-media':                 { label: 'Social Media',                 pdf: 'social-media.pdf' },
+    'consumer-insights':            { label: 'Consumer Insights',            pdf: 'consumer-insights.pdf' },
+    'product-marketing':            { label: 'Product Marketing',            pdf: 'product-marketing.pdf' }
+  },
+
+  // Intro images, stacked top-to-bottom (in this order) as ONE scrolling page
+  // with no gaps. Control positions are % of each image.
+  // type: 'link' (opens in a new tab) | 'start' (begins the quiz)
+  intro: [
+    { image: 'start1.jpg', controls: [] },
+    { image: 'start2.jpg', controls: [
+      { type: 'link', img: 'ringtojoin.png', label: 'Ring to join', alt: 'Ring to join on Instagram',
+        href: 'https://instagram.com/hiredwithangelika', x: 45, y: 90, w: 28 } ] },
+    // start3.jpg is landscape; the headline ends ~72% down and the @handle sits at ~93%.
+    // `size` = button text size as % of image width (kept readable on phones).
+    { image: 'start3.jpg', controls: [
+      { type: 'start', img: 'startquiz.png', label: 'Start the quiz', alt: 'start the quiz',
+        x: 50, y: 80, w: 28 } ] }
+  ],
+
+  // Answer-button placement on question screens, as % of the image.
+  // Keyed by number of options: 5 = Q1-Q9 (one row of hearts), 6 = Q10 (2 x 3 grid).
+  // `positions[k]` = [x, y] of the CENTER of option k+1; `w` = button width.
+  // To use a different layout on one question, add `layout: { w, positions }` to it.
+  answerLayout: {
+    5: { w: 8.1, positions: [[11.9, 73.5], [31.0, 73.5], [50.0, 73.5], [69.0, 73.5], [88.1, 73.5]] },
+    6: { w: 8.0, positions: [[61.6, 24.3], [81.0, 24.3], [61.6, 47.8], [81.0, 47.8], [61.6, 69.4], [81.0, 69.4]] }
+  },
+
+  // Questions. Option k uses button<k+1>.png. Weights: key -> points.
+  questions: [
+    { id: 'q1', image: 'q1.jpg', prompt: 'What does your ideal first hour at work look like?', options: [
+      { button: 'button1.png', caption: 'Mapping the big-picture positioning', weights: { 'brand-strategy': 3, 'consumer-insights': 1 } },
+      { button: 'button2.png', caption: 'Brainstorming bold campaign concepts', weights: { 'advertising-creative': 3, 'entertainment-marketing': 1 } },
+      { button: 'button3.png', caption: 'Building a launch timeline',           weights: { 'marketing-project-management': 3, 'marketing-ops': 1 } },
+      { button: 'button4.png', caption: 'Posting and replying online',          weights: { 'social-media': 3, 'pr-comms': 1 } },
+      { button: 'button5.png', caption: 'Setting up an event on site',          weights: { 'experiential-field': 3, 'partnerships-influencer': 1 } } ] },
+    { id: 'q2', image: 'q2.jpg', prompt: 'A new project lands on your desk. What do you do first?', options: [
+      { button: 'button1.png', caption: 'Dig into customer data',               weights: { 'consumer-insights': 3, 'product-marketing': 1 } },
+      { button: 'button2.png', caption: 'Sketch how the experience flows',      weights: { 'ux-ui-digital-experience': 3, 'product-marketing': 1 } },
+      { button: 'button3.png', caption: 'Draft the pitch to the press',         weights: { 'pr-comms': 3, 'brand-strategy': 1 } },
+      { button: 'button4.png', caption: 'Reach out to creators and partners',   weights: { 'partnerships-influencer': 3, 'social-media': 1 } },
+      { button: 'button5.png', caption: 'Automate the reporting',               weights: { 'marketing-ops': 3, 'consumer-insights': 1 } } ] },
+    { id: 'q3', image: 'q3.jpg', prompt: 'How do you like to spend a free weekend?', options: [
+      { button: 'button1.png', caption: 'Concert or movie premiere',            weights: { 'entertainment-marketing': 3, 'social-media': 1 } },
+      { button: 'button2.png', caption: 'Pop-up market or festival',            weights: { 'experiential-field': 3, 'entertainment-marketing': 1 } },
+      { button: 'button3.png', caption: 'Organizing spreadsheets and systems',  weights: { 'marketing-ops': 2, 'marketing-project-management': 2 } },
+      { button: 'button4.png', caption: 'Browsing app redesigns',               weights: { 'ux-ui-digital-experience': 3, 'product-marketing': 1 } },
+      { button: 'button5.png', caption: 'Making a mood board or short film',    weights: { 'advertising-creative': 2, 'brand-strategy': 1, 'social-media': 1 } } ] },
+    { id: 'q4', image: 'q4.jpg', prompt: 'How would teammates describe you?', options: [
+      { button: 'button1.png', caption: 'The organizer',                        weights: { 'marketing-project-management': 3, 'marketing-ops': 1 } },
+      { button: 'button2.png', caption: 'The storyteller',                      weights: { 'pr-comms': 3, 'advertising-creative': 1 } },
+      { button: 'button3.png', caption: 'The analyst',                          weights: { 'consumer-insights': 3, 'brand-strategy': 1 } },
+      { button: 'button4.png', caption: 'The connector',                        weights: { 'partnerships-influencer': 3, 'pr-comms': 1 } },
+      { button: 'button5.png', caption: 'The trendspotter',                     weights: { 'social-media': 2, 'entertainment-marketing': 2 } } ] },
+    { id: 'q5', image: 'q5.jpg', prompt: 'Which dream project would you pick?', options: [
+      { button: 'button1.png', caption: 'A major product launch',               weights: { 'product-marketing': 3, 'brand-strategy': 1 } },
+      { button: 'button2.png', caption: 'A festival sponsorship',               weights: { 'experiential-field': 2, 'partnerships-influencer': 2 } },
+      { button: 'button3.png', caption: 'A video that goes viral',              weights: { 'social-media': 3, 'advertising-creative': 1 } },
+      { button: 'button4.png', caption: 'A full brand rebrand',                 weights: { 'brand-strategy': 3, 'advertising-creative': 1 } },
+      { button: 'button5.png', caption: 'A streaming-show tie-in',              weights: { 'entertainment-marketing': 3, 'partnerships-influencer': 1 } } ] },
+    { id: 'q6', image: 'q6.jpg', prompt: 'Something goes wrong at the last minute. What do you do?', options: [
+      { button: 'button1.png', caption: 'Write the public statement',           weights: { 'pr-comms': 3, 'brand-strategy': 1 } },
+      { button: 'button2.png', caption: 'Re-plan the schedule and tasks',       weights: { 'marketing-project-management': 3, 'marketing-ops': 1 } },
+      { button: 'button3.png', caption: 'Investigate the drop in conversions',  weights: { 'ux-ui-digital-experience': 2, 'consumer-insights': 1, 'marketing-ops': 1 } },
+      { button: 'button4.png', caption: 'Replace the influencer who dropped out', weights: { 'partnerships-influencer': 3, 'social-media': 1 } },
+      { button: 'button5.png', caption: 'Chase the late event vendor',          weights: { 'experiential-field': 3, 'marketing-project-management': 1 } } ] },
+    { id: 'q7', image: 'q7.jpg', prompt: 'Which tool could you not live without?', options: [
+      { button: 'button1.png', caption: 'Survey and analytics dashboards',      weights: { 'consumer-insights': 3, 'marketing-ops': 1 } },
+      { button: 'button2.png', caption: 'A design and prototyping app',         weights: { 'ux-ui-digital-experience': 3, 'advertising-creative': 1 } },
+      { button: 'button3.png', caption: 'CRM and automation software',          weights: { 'marketing-ops': 3, 'marketing-project-management': 1 } },
+      { button: 'button4.png', caption: 'Camera and video-editing app',         weights: { 'social-media': 3, 'advertising-creative': 1 } },
+      { button: 'button5.png', caption: 'A positioning and messaging brief',    weights: { 'product-marketing': 3, 'brand-strategy': 1 } } ] },
+    { id: 'q8', image: 'q8.jpg', prompt: 'What is your strongest skill?', options: [
+      { button: 'button1.png', caption: 'Persuasive writing',                   weights: { 'advertising-creative': 3, 'pr-comms': 1 } },
+      { button: 'button2.png', caption: 'Understanding why people act',         weights: { 'consumer-insights': 2, 'ux-ui-digital-experience': 1, 'brand-strategy': 1 } },
+      { button: 'button3.png', caption: 'Rallying a crowd',                     weights: { 'experiential-field': 3, 'entertainment-marketing': 1 } },
+      { button: 'button4.png', caption: 'Negotiating deals',                    weights: { 'partnerships-influencer': 3, 'marketing-project-management': 1 } },
+      { button: 'button5.png', caption: 'Thinking long term',                   weights: { 'brand-strategy': 3, 'product-marketing': 1 } } ] },
+    { id: 'q9', image: 'q9.jpg', prompt: 'Where do you do your best work?', options: [
+      { button: 'button1.png', caption: 'Backstage at a set or venue',          weights: { 'entertainment-marketing': 3, 'experiential-field': 1 } },
+      { button: 'button2.png', caption: 'On an agency creative floor',          weights: { 'advertising-creative': 3, 'social-media': 1 } },
+      { button: 'button3.png', caption: 'Inside a product team',                weights: { 'product-marketing': 3, 'ux-ui-digital-experience': 1 } },
+      { button: 'button4.png', caption: 'In a fast-moving comms room',          weights: { 'pr-comms': 2, 'social-media': 2 } },
+      { button: 'button5.png', caption: 'At the ops command center',            weights: { 'marketing-ops': 2, 'marketing-project-management': 2 } } ] },
+    { id: 'q10', image: 'q10.jpg', prompt: 'Which headline would you most love to see?', options: [   // six options
+      { button: 'button1.png', caption: 'A brand reimagined',                   weights: { 'brand-strategy': 3, 'consumer-insights': 1 } },
+      { button: 'button2.png', caption: 'The product sells out',                weights: { 'product-marketing': 3, 'partnerships-influencer': 1 } },
+      { button: 'button3.png', caption: 'The post breaks the internet',         weights: { 'social-media': 3, 'entertainment-marketing': 1 } },
+      { button: 'button4.png', caption: 'Fans line up around the block',        weights: { 'experiential-field': 3, 'entertainment-marketing': 1 } },
+      { button: 'button5.png', caption: 'The app wins a design award',          weights: { 'ux-ui-digital-experience': 3, 'marketing-ops': 1 } },
+      { button: 'button6.png', caption: 'Creators team up with the brand',      weights: { 'partnerships-influencer': 2, 'pr-comms': 1, 'advertising-creative': 1 } } ] }
+  ]
+};
+
+/* =====================================================================
+   2. APP LOGIC  -  no content lives below this line.
+   ===================================================================== */
+(function () {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), bg = $('bg'), layer = $('layer'), backdrop = $('backdrop');
+  const resultEl = $('result'), noticeEl = $('notice'), introEl = $('intro');
+
+  // ---- In-memory state (only the final result touches localStorage) ----
+  let scores = {}, maxSingle = {}, locked = false, token = 0;
+
+  function resetState() {
+    scores = {}; maxSingle = {};
+    Object.keys(QUIZ.careers).forEach((k) => { scores[k] = 0; maxSingle[k] = 0; });
+    locked = false;
+  }
+
+  // ---- Data validation: returns a list of human-readable problems ----
+  function validate(d) {
+    const e = [], keys = Object.keys(d.careers || {});
+    if (!keys.length) e.push('careers: at least one category is required');
+    keys.forEach((k) => { if (!d.careers[k] || !d.careers[k].pdf) e.push('careers.' + k + ': missing "pdf"'); });
+    if (!d.careers || !d.careers[d.defaultResult]) e.push('defaultResult must be a key of careers');
+    if (!Array.isArray(d.intro) || !d.intro.length) e.push('intro: at least one screen is required');
+    else d.intro.forEach((s, i) => { if (!s || !s.image) e.push('intro[' + i + ']: missing "image"'); });
+    if (!Array.isArray(d.questions) || !d.questions.length) { e.push('questions: at least one question is required'); return e; }
+    d.questions.forEach((q, i) => {
+      const p = 'questions[' + i + ']';
+      if (!q || !q.id) e.push(p + ': missing "id"');
+      if (!q || !q.image) e.push(p + ': missing "image"');
+      if (!q || !q.prompt) e.push(p + ': missing "prompt"');
+      if (!q || !Array.isArray(q.options) || q.options.length < 2) { e.push(p + ': needs at least 2 options'); return; }
+      const lay = q.layout || (d.answerLayout || {})[q.options.length];
+      if (!lay || !Array.isArray(lay.positions) || lay.positions.length !== q.options.length || !lay.w)
+        e.push(p + ': no layout with ' + q.options.length + ' positions (see answerLayout)');
+      q.options.forEach((o, j) => {
+        const pp = p + '.options[' + j + ']', w = o && o.weights;
+        if (!o || !o.button) e.push(pp + ': missing "button"');
+        if (!w || typeof w !== 'object' || !Object.keys(w).length) { e.push(pp + ': "weights" must be a non-empty object'); return; }
+        Object.entries(w).forEach(([k, v]) => {
+          if (!d.careers[k]) e.push(pp + ': unknown category "' + k + '"');
+          if (!Number.isFinite(v) || v <= 0) e.push(pp + ': weight for "' + k + '" must be a positive number');
+        });
+      });
+    });
+    return e;
+  }
+
+  // ---- Scoring ----
+  function addWeights(weights) {
+    Object.entries(weights).forEach(([k, v]) => {
+      if (!(k in scores) || !Number.isFinite(v)) { console.warn('Ignored weight:', k, v); return; }
+      scores[k] += v;
+      maxSingle[k] = Math.max(maxSingle[k], v);
+    });
+  }
+
+  // 1) highest total  2) highest single-option weight  3) order in QUIZ.careers
+  function pickWinner() {
+    const keys = Object.keys(QUIZ.careers);
+    const top = Math.max(...keys.map((k) => scores[k]));
+    if (!(top > 0)) return QUIZ.defaultResult;           // nothing scored
+    const tied = keys.filter((k) => scores[k] === top);
+    if (tied.length === 1) return tied[0];
+    const best = Math.max(...tied.map((k) => maxSingle[k]));
+    return tied.find((k) => maxSingle[k] === best);
+  }
+
+  // ---- Notices (errors) ----
+  function showNotice(title, lines, action) {
+    noticeEl.replaceChildren();
+    const card = document.createElement('div'); card.className = 'card';
+    const h = document.createElement('h2'); h.textContent = title; card.appendChild(h);
+    if (lines && lines.length) {
+      const ul = document.createElement('ul');
+      lines.forEach((t) => { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
+      card.appendChild(ul);
+    }
+    noticeEl.appendChild(card); noticeEl.hidden = false;
+    if (action) {                                         // optional recovery button
+      const b = makeControl({ label: action.label, onClick: action.onClick });
+      b.style.cssText = 'position:static;translate:none;margin-top:1rem;display:inline-flex';
+      card.appendChild(b);
+    }
+  }
+
+  // ---- Control factory: image button with text fallback, or link ----
+  function makeControl(d) {
+    const el = document.createElement(d.href ? 'a' : 'button');
+    el.className = 'btn' + (d.img ? '' : ' pill');
+    if (d.href) { el.href = d.href; el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+    else { el.type = 'button'; el.addEventListener('click', d.onClick); }
+    if (d.x != null) { el.style.left = d.x + '%'; el.style.top = d.y + '%'; }
+    if (d.w) el.style.width = d.w + '%';
+    if (d.size) el.style.fontSize = 'clamp(13px, ' + d.size + 'cqw, 60px)';
+    el.setAttribute('aria-label', d.alt || d.label);
+    if (d.img) {
+      const im = new Image(); im.alt = ''; im.draggable = false;
+      im.onerror = () => {                                // missing button asset -> text button
+        console.warn('Missing asset: ' + d.img);
+        im.remove(); el.classList.add('pill'); el.textContent = d.label;
+      };
+      im.src = d.img; el.appendChild(im);
+    } else el.textContent = d.label;
+    return el;
+  }
+
+  // ---- Screen renderer: background image + overlaid controls ----
+  const loadImage = (src) => new Promise((res) => {
+    const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src;
+  });
+  const preload = (src) => { if (src) new Image().src = src; };
+
+  async function showScreen(image, alt, controls) {
+    const my = ++token;
+    const img = await loadImage(image);
+    if (my !== token) return;                             // a newer screen took over
+    resultEl.hidden = true; noticeEl.hidden = true; introEl.hidden = true; stage.hidden = false;
+    let ratio = QUIZ.fallbackRatio;
+    layer.replaceChildren();
+    if (img) {
+      ratio = img.naturalWidth / img.naturalHeight;
+      bg.hidden = false; bg.src = image; bg.alt = alt || '';
+      backdrop.style.backgroundImage = 'url("' + image + '")';
+    } else {                                              // missing background: keep quiz usable
+      console.error('Missing asset: ' + image);
+      bg.hidden = true; bg.removeAttribute('src'); backdrop.style.backgroundImage = 'none';
+      const w = document.createElement('div'); w.className = 'warn';
+      w.textContent = 'Image not found: ' + image + '. Add it next to index.html.';
+      layer.appendChild(w);
+    }
+    stage.style.setProperty('--ratio', ratio);
+    controls.forEach((c) => layer.appendChild(makeControl(c)));
+    stage.classList.remove('in'); void stage.offsetWidth; stage.classList.add('in');
+    locked = false;
+  }
+
+  // ---- Flow ----
+  // Intro = one scrollable page: every intro image at full width, stacked with no gaps.
+  function showIntro() {
+    token++;                                              // cancel any pending screen
+    stage.hidden = true; resultEl.hidden = true; noticeEl.hidden = true;
+    backdrop.style.backgroundImage = 'none';
+    introEl.replaceChildren();
+    QUIZ.intro.forEach((s, i) => {
+      const slice = document.createElement('div'); slice.className = 'slice';
+      const im = new Image(); im.alt = 'Introduction part ' + (i + 1); im.draggable = false;
+      im.onerror = () => {                                // missing image: show a placeholder
+        console.error('Missing asset: ' + s.image);
+        im.remove(); slice.style.aspectRatio = QUIZ.fallbackRatio; slice.style.background = '#241a2b';
+        const w = document.createElement('div'); w.className = 'warn';
+        w.textContent = 'Image not found: ' + s.image + '. Add it next to index.html.';
+        slice.appendChild(w);
+      };
+      im.src = s.image; slice.appendChild(im);
+      s.controls.forEach((c) => slice.appendChild(makeControl(Object.assign({}, c, { onClick: startQuiz }))));
+      introEl.appendChild(slice);
+    });
+    introEl.hidden = false; introEl.scrollTop = 0;
+    preload(QUIZ.questions[0].image);
+  }
+
+  function startQuiz() { resetState(); showQuestion(0); }
+
+  function showQuestion(i) {
+    const q = QUIZ.questions[i], L = q.layout || QUIZ.answerLayout[q.options.length];
+    const controls = q.options.map((o, k) => ({
+      img: o.button, label: o.caption || 'Option ' + (k + 1),
+      alt: 'Option ' + (k + 1) + (o.caption ? ': ' + o.caption : ''),
+      x: L.positions[k][0], y: L.positions[k][1], w: L.w,
+      onClick: () => choose(i, k)
+    }));
+    showScreen(q.image, q.prompt, controls);
+    if (QUIZ.questions[i + 1]) preload(QUIZ.questions[i + 1].image);
+  }
+
+  function choose(i, k) {
+    if (locked) return; locked = true;                    // ignore double taps
+    addWeights(QUIZ.questions[i].options[k].weights);
+    if (i + 1 < QUIZ.questions.length) showQuestion(i + 1); else showResult();
+  }
+
+  // Confirm a PDF exists. Network errors (e.g. file://) can't be verified -> assume OK.
+  async function pdfUrl(key) {
+    const url = QUIZ.careers[key].pdf;
+    try { const r = await fetch(url, { method: 'HEAD' }); return (r.ok || r.status === 405) ? url : null; }
+    catch (e) { return url; }
+  }
+
+  async function showResult() {
+    token++;                                              // cancel pending screens
+    let key = QUIZ.defaultResult;
+    try { key = pickWinner(); } catch (e) { console.error('Scoring failed:', e); }
+    if (!QUIZ.careers[key]) key = QUIZ.defaultResult;
+    let url = await pdfUrl(key);
+    if (!url && key !== QUIZ.defaultResult) {             // missing PDF -> default result
+      console.warn('Missing PDF for ' + key + '; using ' + QUIZ.defaultResult);
+      key = QUIZ.defaultResult; url = await pdfUrl(key);
+    }
+    try { localStorage.setItem(QUIZ.storageKey, key); } catch (e) { console.warn('localStorage unavailable:', e); }
+    if (!url) {
+      return showNotice('Your result file could not be loaded',
+        ['Add "' + QUIZ.careers[key].pdf + '" next to index.html and try again.'],
+        { label: 'Retake quiz', onClick: startQuiz });
+    }
+    // PDF fills the screen: the iframe is 100% x 100%, and FitH / page-width make the viewer
+    // scale each page to the full WIDTH of the screen (scroll down for further pages).
+    // FitH is read by Chrome/Edge/Safari, zoom=page-width by Firefox.
+    resultEl.replaceChildren();
+    const f = document.createElement('iframe');
+    f.src = url + '#view=FitH&zoom=page-width&toolbar=0&navpanes=0'; f.title = QUIZ.careers[key].label + ' result';
+    resultEl.appendChild(f);
+    resultEl.appendChild(makeControl({ href: url, label: 'Open PDF', x: 88, y: 95 }));
+    resultEl.appendChild(makeControl({ label: 'Retake quiz', onClick: startQuiz, x: 12, y: 95 }));
+    stage.hidden = true; noticeEl.hidden = true; introEl.hidden = true; resultEl.hidden = false;
+    backdrop.style.backgroundImage = 'none';
+  }
+
+  // ---- Boot ----
+  try {
+    const problems = validate(QUIZ);
+    if (problems.length) { console.error('Invalid QUIZ data:', problems); showNotice('Quiz data is invalid', problems); }
+    else { resetState(); showIntro(); }
+  } catch (e) {
+    console.error(e); showNotice('The quiz could not start', [String(e.message || e)]);
+  }
+})();
+</script>
+</body>
+</html>
